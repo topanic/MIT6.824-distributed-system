@@ -25,6 +25,29 @@ type ExampleReply struct {
 // Add your RPC definitions here.
 
 
+type CallForTaskArgs struct {
+
+}
+
+type CallForTaskReply struct {
+	TaskType byte // 'm' means map, 'r' means reduce
+	TaskNum int // be used to name the intermediate files
+
+	Filename string  // the file that work should 'mapf'
+	NReduce int	 // will divide kv into 'NReduce' intermediate files
+
+	HasTask bool // make sure if a task is avaliable
+}
+
+type TaskCompleteArgs struct {
+	TaskType byte // 'm' means map, 'r' means reduce
+	TaskNum int  // the task number worker complete
+}
+
+type TaskCompleteReply struct {
+
+}
+
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
 // Can't use the current directory since
