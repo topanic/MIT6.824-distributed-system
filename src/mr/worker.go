@@ -9,8 +9,9 @@ import (
 	"log"
 	"net/rpc"
 	"os"
-	"time"
 	"path/filepath"
+	"sort"
+	"time"
 )
 
 //
@@ -117,7 +118,7 @@ func doReduce(taskNum int, reducef func(string, []string) string) {
 	if err != nil {
 		log.Fatalln("Reduce: glob intermediate error. ")
 	}
-	kva := make([]KeyValue, 20)
+	kva := make([]KeyValue, 0)
 	for _, file := range files {
 		f, err := os.Open(file)
 		if err != nil {
@@ -134,6 +135,7 @@ func doReduce(taskNum int, reducef func(string, []string) string) {
 
 	}
 	// start to reduce
+	sort.Sort(ByKey(kva))
 	oname := fmt.Sprintf("mr-out-%d", taskNum)
 	ofile, _ := os.Create(oname)
 	i := 0
@@ -206,6 +208,14 @@ func saveIntermediate(intermediate []KeyValue, mapTaskNum, nReduce int) {
 		}
 	}
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // example function to show how to make an RPC call to the coordinator.
