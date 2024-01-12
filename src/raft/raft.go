@@ -28,6 +28,14 @@ import (
 	"6.5840/labrpc"
 )
 
+// three type in raft
+type raftState string
+const (
+	LEADER raftState = "LEADER"
+	CANDIDATE raftState = "CANDIDATE"
+	FOLLOWER raftState = "FOLLOWER"
+) 
+
 
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -62,6 +70,28 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// state
+	state raftState
+
+	// persistent state
+	currentTerm uint
+	voteFor uint
+	log []*LogEntry
+
+	// volatile state
+	commitIndex uint
+	lastApplied uint
+
+	// volatile state(leader only)
+	
+
+
+}
+
+type LogEntry struct {
+	// first is 1.
+	command string
+	term uint	// when entry was received by leader
 }
 
 // return currentTerm and whether this server
@@ -128,17 +158,24 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term uint	// candidate's term
+	CandidateId uint	// candidate's Id who is requesting vote
+	LastLogIndex uint  
+	LastLogTerm uint 
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term uint
+	VoteGranted	bool	
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	// if args.Term < 
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -170,6 +207,31 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+// AppendEntries RPC
+type AppendEntriesArgs struct {
+	Term uint
+	LeaderId uint
+	PrevLogIndex uint
+	PrevLogTerm uint
+	Extries []*LogEntry
+	LeaderCommit uint	//leader's commitIndex
+}
+
+type AppendEntriesReply struct {
+	Term uint
+	success bool
+
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -221,7 +283,10 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
-
+		if 
+		// for index, peer := range rf.peers {
+			
+		// }
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
@@ -247,6 +312,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.state = FOLLOWER
+	rf.currentTerm = 0
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
