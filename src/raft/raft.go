@@ -19,22 +19,14 @@ package raft
 
 import (
 	//	"bytes"
-	"math/rand"
+	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
-)
-
-// three type in raft
-type raftState string
-
-const (
-	LEADER    raftState = "LEADER"
-	CANDIDATE raftState = "CANDIDATE"
-	FOLLOWER  raftState = "FOLLOWER"
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -70,8 +62,16 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// log
+	logger *Log
+
 	// state
-	state raftState
+	state       raftState
+	leaderExist bool
+
+	// ticker
+	electionTimeoutTicker *time.Ticker
+	heartBeatTicker       *time.Ticker
 
 	// persistent state
 	currentTerm int
@@ -86,11 +86,6 @@ type Raft struct {
 
 }
 
-type LogEntry struct {
-	// first is 1.
-	command string
-	term    int // when entry was received by leader
-}
 
 // return currentTerm and whether this server
 // believes it is the leader.
@@ -165,12 +160,79 @@ type RequestVoteReply struct {
 	// Your data here (2A).
 	Term        int
 	VoteGranted bool
+	// for debug
+	VoteId int
 }
 
+// what changed in RequestVote RPC handler?
+// ************************************
+// currentTerm, voteFor, electionTimeoutTicker
+// ************************************
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	// if args.Term <
+	rf.mu.Lock()
+	switch rf.state {
+	case LEADER:
+		// if there is a leader, practical won't case it.
+		// logg.log2A.Panicf("[peer %d | %s | term %d]: %s", rf.me, rf.state, rf.currentTerm,  "Leader get RequestVote RPC, something get wrong.")
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		reply.VoteId = rf.me
+	case CANDIDATE:
+		// if self, vote for self.
+		if args.CandidateId == rf.me {
+			rf.voteFor = rf.me
+
+			reply.Term = rf.currentTerm
+			reply.VoteGranted = true
+			reply.VoteId = rf.me
+			logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("%d is candidate, vote for %d", rf.me, reply.VoteId))
+		} 
+		if args.CandidateId != rf.me {
+			// from another candidate, reject it, since we should vote for self.
+			reply.Term = rf.currentTerm
+			reply.VoteGranted = false
+			reply.VoteId = rf.me
+			logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("%d is candidate, reject %d", rf.me, reply.VoteId))
+		}
+	case FOLLOWER:
+		// first update self's term if term < candidate's.
+		if args.Term > rf.currentTerm {
+
+			rf.electionTimeoutTicker.Reset(randomTimeForElectionTimeout())
+			rf.currentTerm = args.Term
+
+		}
+		// if candidate satisfy rule of being a leader, vote for the canditate.
+		// reject
+		if args.Term < rf.currentTerm {
+			reply.Term = rf.currentTerm
+			reply.VoteGranted = false
+			reply.VoteId = rf.me
+		}
+		// accept
+		if rf.voteFor == NULL || rf.voteFor == args.CandidateId {
+
+			rf.electionTimeoutTicker.Reset(randomTimeForElectionTimeout())
+			rf.voteFor = args.CandidateId
+
+			reply.Term = rf.currentTerm
+			reply.VoteGranted = true
+			reply.VoteId = rf.me
+			logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("Accept request vote, %d vote for %d", rf.me, args.CandidateId))
+		} else {
+			reply.Term = rf.currentTerm
+			reply.VoteGranted = false
+			reply.VoteId = rf.me
+			logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("Reject request vote, %d reject for %d", rf.me, args.CandidateId))
+		}
+		// TODO: candidate's log is at least as up-to-date as receiver's log
+		
+
+	}
+	rf.mu.Unlock()
+
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -211,16 +273,66 @@ type AppendEntriesArgs struct {
 	LeaderId     int
 	PrevLogIndex int
 	PrevLogTerm  int
-	Extries      []*LogEntry
+	Entries      []*LogEntry
 	LeaderCommit int //leader's commitIndex
 }
 
 type AppendEntriesReply struct {
 	Term    int
-	success bool
+	Success bool
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	// heartbeat
+	if len(args.Entries) == 0 {
+		rf.mu.Lock()
+		switch rf.state {
+		case LEADER:
+			// pass
+			
+			rf.voteFor = NULL
+
+			reply.Term = rf.currentTerm
+			reply.Success = true
+		case CANDIDATE:
+			// leader's current term >= candidate's current term 
+			if args.Term >= rf.currentTerm {
+				// turn into follower
+
+				rf.electionTimeoutTicker.Reset(randomTimeForElectionTimeout())
+				rf.currentTerm = args.Term
+				rf.state = FOLLOWER
+				// update voteFor
+				rf.voteFor = NULL
+				
+				reply.Term = rf.currentTerm
+				reply.Success = true
+				logg.printf2A(rf.me, rf.state, rf.currentTerm, "Candidate received a hearbeat, turn into follower")
+			} else {
+				// reject the heart beat, continue candidate
+			
+				reply.Term = rf.currentTerm
+				reply.Success = false
+			
+				logg.printf2A(rf.me, rf.state, rf.currentTerm, "The request's term < me's term, reject the request.")
+			}
+		case FOLLOWER:
+			if rf.currentTerm < args.Term {
+				
+				rf.currentTerm = args.Term
+			
+			}
+			// update voteFor
+		
+			rf.voteFor = NULL
+			rf.electionTimeoutTicker.Reset(randomTimeForElectionTimeout())
+		
+			reply.Term = rf.currentTerm
+			reply.Success = true
+		}
+	}
+	rf.mu.Unlock()
+	// append entries phase
 
 }
 
@@ -270,30 +382,150 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-func (rf *Raft) ticker() {
-	for rf.killed() == false {
-
+// what changed in ET Ticker goroutine?
+// ************************************
+// currentTerm, state, 
+// ************************************
+// 
+// send heartbeat
+func (rf *Raft) HBTicker() {
+	for !rf.killed() {
 		// Your code here (2A)
 		// Check if a leader election should be started.
-		if rf.state == LEADER {
-			args := &AppendEntriesArgs{
-				Term:     rf.currentTerm,
-				LeaderId: rf.me,
-				// TODO: about log should be add
-				Extries: nil,
-				//LeaderCommit:
+		// This is used to heartbeat.
+
+		<-rf.heartBeatTicker.C
+		rf.heartBeatTicker.Reset(randomTimeForHeartBeat())
+		switch rf.state {
+		case LEADER:
+			args := newHeartBeatArgs(rf.currentTerm, rf.me)
+			reply := newHeartBeatReply()
+			logg.printf2A(rf.me, rf.state, rf.currentTerm, "Leader trying to send heart beat.")
+			for index := range rf.peers {
+				rf.sendAppendEntries(index, args, reply)
+				// if leader's term < other, turn into follower.
+				if rf.currentTerm < reply.Term {
+					rf.mu.Lock()
+					rf.currentTerm = reply.Term
+					rf.state = FOLLOWER
+					rf.mu.Unlock()
+					logg.printf2A(rf.me, rf.state, rf.currentTerm, "Leader's term < other, turn into follower.")
+				}
 			}
-			for index, _ := range rf.peers {
-				rf.sendAppendEntries(index)
-			}
+		case CANDIDATE:
+			continue
+		case FOLLOWER:
+			continue
+		default:
+			log.Fatalln("HBTicker: error raft state.")
 		}
+		
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+		// ms := 50 + (rand.Int63() % 300)
+		// time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
+
+// what changed in ET Ticker goroutine?
+// ************************************
+// currentTerm, state, electionTimeoutTicker, 
+// ************************************
+// used to ticker election timeout
+func (rf *Raft) ETTicker() {
+	for !rf.killed() {
+		<-rf.electionTimeoutTicker.C
+		switch rf.state {
+		case LEADER:
+			continue
+		case CANDIDATE:
+			// restart election
+			rf.mu.Lock()
+			rf.electionTimeoutTicker.Reset(randomTimeForElectionTimeout())
+			rf.currentTerm++
+			rf.voteFor = rf.me
+			rf.mu.Unlock()
+			// requestVote RPC
+			logg.printf2A(rf.me, rf.state, rf.currentTerm, "Candidate be not able to become leader, restart election.")
+			args := newRequestVoteArgs(rf.currentTerm, rf.me, NULL, NULL)
+			reply := newRequestVoteReply()
+			totalGranted := 0
+			for index := range rf.peers {
+				rf.sendRequestVote(index, args, reply)
+				// when vote for leader, if candicate's term < other's, turn into follower.
+				if rf.currentTerm < reply.Term {
+					rf.mu.Lock()
+					rf.currentTerm = reply.Term
+					rf.state = FOLLOWER
+					rf.mu.Unlock()
+					break
+				}
+				if reply.VoteGranted {
+					totalGranted++
+					logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("%d receive vote from %d", rf.me, reply.VoteId))
+				}
+			}
+			// get the major granted, success to become leader
+			if totalGranted > (len(rf.peers) / 2) {
+				rf.state = LEADER
+				logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("In restart election phase, candidate get most of grant(%d), become a leader.", totalGranted))
+				// send a heart beat
+				hbArgs := newHeartBeatArgs(rf.currentTerm, rf.me)
+				hbReply := newHeartBeatReply()
+				for index := range rf.peers {
+					rf.sendAppendEntries(index, hbArgs, hbReply)
+				}
+				rf.electionTimeoutTicker.Reset(randomTimeForHeartBeat())
+				logg.printf2A(rf.me, rf.state, rf.currentTerm, "Leader(candidate before) start a heartbeat.")
+			}
+
+		case FOLLOWER:
+			// start election
+			rf.mu.Lock()
+			rf.state = CANDIDATE
+			rf.currentTerm++
+			rf.voteFor = rf.me
+			rf.electionTimeoutTicker.Reset(randomTimeForElectionTimeout())
+			rf.mu.Unlock()
+			// requestVote RPC
+			logg.printf2A(rf.me, rf.state, rf.currentTerm, "Follower turn into candidate, issue a RequestVote RPC.")
+			args := newRequestVoteArgs(rf.currentTerm, rf.me, NULL, NULL)
+			reply := newRequestVoteReply()
+			totalGranted := 0
+			for index := range rf.peers {
+				rf.sendRequestVote(index, args, reply)
+				// when vote for leader, if candicate's term < other's, turn into follower.
+				if rf.currentTerm < reply.Term {
+					rf.mu.Lock()
+					rf.currentTerm = reply.Term
+					rf.state = FOLLOWER
+					rf.mu.Unlock()
+					break
+				}
+				if reply.VoteGranted {
+					logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("%d receive vote from %d", rf.me, reply.VoteId))
+					totalGranted++
+				}
+			}
+			// get the major granted, success to become leader
+			if totalGranted > (len(rf.peers) / 2) {
+				rf.state = LEADER
+				logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("Follower turn into candidate, get most of grant(%d), become a leader.", totalGranted))
+				// send a heart beat
+				hbArgs := newHeartBeatArgs(rf.currentTerm, rf.me)
+				hbReply := newHeartBeatReply()
+				for index := range rf.peers {
+					rf.sendAppendEntries(index, hbArgs, hbReply)
+				}
+				rf.electionTimeoutTicker.Reset(randomTimeForHeartBeat())
+				logg.printf2A(rf.me, rf.state, rf.currentTerm, "Leader(follower before) start a heartbeat.")
+			}
+		}
+	}
+}
+
+
 
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -313,13 +545,20 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.state = FOLLOWER
+	rf.electionTimeoutTicker = time.NewTicker(randomTimeForElectionTimeout())
+	rf.heartBeatTicker = time.NewTicker(randomTimeForHeartBeat())
+	rf.leaderExist = true
+
 	rf.currentTerm = 0
+	rf.voteFor = NULL
+	rf.log = make([]*LogEntry, 0)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
-	go rf.ticker()
+	go rf.ETTicker()
+	go rf.HBTicker()
 
 	return rf
 }
