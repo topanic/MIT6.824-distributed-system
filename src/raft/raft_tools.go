@@ -71,6 +71,7 @@ func newHeartBeatReply() *AppendEntriesReply {
 type Log struct {
 	log2A *log.Logger
 	log2B *log.Logger
+
 }
 
 func NewLog() *Log {
@@ -87,12 +88,16 @@ func NewLog() *Log {
 	}
 }
 
-func (l *Log) printf2A(me int, state raftState, term int, msg string) {
-	l.log2A.Printf("[peer %d | %s | term %d]: %s", me, state, term, msg)
+// func (l *Log) printf2A(me int, state raftState, term int, msg string) {
+// 	l.log2A.Printf("[peer %d | %s | term %d]: %s", me, state, term, msg)
+// }
+
+func (l *Log) printf2A(rf *Raft, msg string) {
+	l.log2A.Printf("[peer %d | %s | term %d]: %s", rf.me, rf.state, rf.currentTerm, msg)
 }
 
-// func (l *Log) debug_SendHeartbeat(me int, state raftState, term int, ) {
-// 	l.logDEBUG.Printf("")
-// }
+func (l *Log) printf2B(rf *Raft, msg string) {
+	l.log2B.Printf("[peer %d | %s | term %d]: %s", rf.me, rf.state, rf.currentTerm, msg)
+}
 
 var logg *Log = NewLog()

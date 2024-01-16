@@ -175,7 +175,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	switch rf.state {
 	case LEADER:
 		// if there is a leader, practical won't case it.
-		// logg.log2A.Panicf("[peer %d | %s | term %d]: %s", rf.me, rf.state, rf.currentTerm,  "Leader get RequestVote RPC, something get wrong.")
+		// logg.log2A.Panicf("[peer %d | %s | term %d]: %s", rf,  "Leader get RequestVote RPC, something get wrong.")
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		reply.VoteId = rf.me
@@ -187,14 +187,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.Term = rf.currentTerm
 			reply.VoteGranted = true
 			reply.VoteId = rf.me
-			logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("%d is candidate, vote for %d", rf.me, reply.VoteId))
+			logg.printf2A(rf, fmt.Sprintf("%d is candidate, vote for %d", rf.me, reply.VoteId))
 		} 
 		if args.CandidateId != rf.me {
 			// from another candidate, reject it, since we should vote for self.
 			reply.Term = rf.currentTerm
 			reply.VoteGranted = false
 			reply.VoteId = rf.me
-			logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("%d is candidate, reject %d", rf.me, reply.VoteId))
+			logg.printf2A(rf, fmt.Sprintf("%d is candidate, reject %d", rf.me, reply.VoteId))
 		}
 	case FOLLOWER:
 		// first update self's term if term < candidate's.
@@ -220,12 +220,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.Term = rf.currentTerm
 			reply.VoteGranted = true
 			reply.VoteId = rf.me
-			logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("Accept request vote, %d vote for %d", rf.me, args.CandidateId))
+			logg.printf2A(rf, fmt.Sprintf("Accept request vote, %d vote for %d", rf.me, args.CandidateId))
 		} else {
 			reply.Term = rf.currentTerm
 			reply.VoteGranted = false
 			reply.VoteId = rf.me
-			logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("Reject request vote, %d reject for %d", rf.me, args.CandidateId))
+			logg.printf2A(rf, fmt.Sprintf("Reject request vote, %d reject for %d", rf.me, args.CandidateId))
 		}
 		// TODO: candidate's log is at least as up-to-date as receiver's log
 		
@@ -307,14 +307,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				
 				reply.Term = rf.currentTerm
 				reply.Success = true
-				logg.printf2A(rf.me, rf.state, rf.currentTerm, "Candidate received a hearbeat, turn into follower")
+				logg.printf2A(rf, "Candidate received a hearbeat, turn into follower")
 			} else {
 				// reject the heart beat, continue candidate
 			
 				reply.Term = rf.currentTerm
 				reply.Success = false
 			
-				logg.printf2A(rf.me, rf.state, rf.currentTerm, "The request's term < me's term, reject the request.")
+				logg.printf2A(rf, "The request's term < me's term, reject the request.")
 			}
 		case FOLLOWER:
 			if rf.currentTerm < args.Term {
@@ -400,7 +400,7 @@ func (rf *Raft) HBTicker() {
 		case LEADER:
 			args := newHeartBeatArgs(rf.currentTerm, rf.me)
 			reply := newHeartBeatReply()
-			logg.printf2A(rf.me, rf.state, rf.currentTerm, "Leader trying to send heart beat.")
+			logg.printf2A(rf, "Leader trying to send heart beat.")
 			for index := range rf.peers {
 				rf.sendAppendEntries(index, args, reply)
 				// if leader's term < other, turn into follower.
@@ -409,7 +409,7 @@ func (rf *Raft) HBTicker() {
 					rf.currentTerm = reply.Term
 					rf.state = FOLLOWER
 					rf.mu.Unlock()
-					logg.printf2A(rf.me, rf.state, rf.currentTerm, "Leader's term < other, turn into follower.")
+					logg.printf2A(rf, "Leader's term < other, turn into follower.")
 				}
 			}
 		case CANDIDATE:
@@ -447,7 +447,7 @@ func (rf *Raft) ETTicker() {
 			rf.voteFor = rf.me
 			rf.mu.Unlock()
 			// requestVote RPC
-			logg.printf2A(rf.me, rf.state, rf.currentTerm, "Candidate be not able to become leader, restart election.")
+			logg.printf2A(rf, "Candidate be not able to become leader, restart election.")
 			args := newRequestVoteArgs(rf.currentTerm, rf.me, NULL, NULL)
 			reply := newRequestVoteReply()
 			totalGranted := 0
@@ -463,13 +463,13 @@ func (rf *Raft) ETTicker() {
 				}
 				if reply.VoteGranted {
 					totalGranted++
-					logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("%d receive vote from %d", rf.me, reply.VoteId))
+					logg.printf2A(rf, fmt.Sprintf("%d receive vote from %d", rf.me, reply.VoteId))
 				}
 			}
 			// get the major granted, success to become leader
 			if totalGranted > (len(rf.peers) / 2) {
 				rf.state = LEADER
-				logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("In restart election phase, candidate get most of grant(%d), become a leader.", totalGranted))
+				logg.printf2A(rf, fmt.Sprintf("In restart election phase, candidate get most of grant(%d), become a leader.", totalGranted))
 				// send a heart beat
 				hbArgs := newHeartBeatArgs(rf.currentTerm, rf.me)
 				hbReply := newHeartBeatReply()
@@ -477,7 +477,7 @@ func (rf *Raft) ETTicker() {
 					rf.sendAppendEntries(index, hbArgs, hbReply)
 				}
 				rf.electionTimeoutTicker.Reset(randomTimeForHeartBeat())
-				logg.printf2A(rf.me, rf.state, rf.currentTerm, "Leader(candidate before) start a heartbeat.")
+				logg.printf2A(rf, "Leader(candidate before) start a heartbeat.")
 			}
 
 		case FOLLOWER:
@@ -489,7 +489,7 @@ func (rf *Raft) ETTicker() {
 			rf.electionTimeoutTicker.Reset(randomTimeForElectionTimeout())
 			rf.mu.Unlock()
 			// requestVote RPC
-			logg.printf2A(rf.me, rf.state, rf.currentTerm, "Follower turn into candidate, issue a RequestVote RPC.")
+			logg.printf2A(rf, "Follower turn into candidate, issue a RequestVote RPC.")
 			args := newRequestVoteArgs(rf.currentTerm, rf.me, NULL, NULL)
 			reply := newRequestVoteReply()
 			totalGranted := 0
@@ -504,14 +504,14 @@ func (rf *Raft) ETTicker() {
 					break
 				}
 				if reply.VoteGranted {
-					logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("%d receive vote from %d", rf.me, reply.VoteId))
+					logg.printf2A(rf, fmt.Sprintf("%d receive vote from %d", rf.me, reply.VoteId))
 					totalGranted++
 				}
 			}
 			// get the major granted, success to become leader
 			if totalGranted > (len(rf.peers) / 2) {
 				rf.state = LEADER
-				logg.printf2A(rf.me, rf.state, rf.currentTerm, fmt.Sprintf("Follower turn into candidate, get most of grant(%d), become a leader.", totalGranted))
+				logg.printf2A(rf, fmt.Sprintf("Follower turn into candidate, get most of grant(%d), become a leader.", totalGranted))
 				// send a heart beat
 				hbArgs := newHeartBeatArgs(rf.currentTerm, rf.me)
 				hbReply := newHeartBeatReply()
@@ -519,7 +519,7 @@ func (rf *Raft) ETTicker() {
 					rf.sendAppendEntries(index, hbArgs, hbReply)
 				}
 				rf.electionTimeoutTicker.Reset(randomTimeForHeartBeat())
-				logg.printf2A(rf.me, rf.state, rf.currentTerm, "Leader(follower before) start a heartbeat.")
+				logg.printf2A(rf, "Leader(follower before) start a heartbeat.")
 			}
 		}
 	}
