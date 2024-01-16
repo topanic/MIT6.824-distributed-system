@@ -9,12 +9,12 @@ import (
 )
 
 // three state in raft
-type raftState string
+type raftState int
 
 const (
-	LEADER    raftState = "LEADER"
-	CANDIDATE raftState = "CANDIDATE"
-	FOLLOWER  raftState = "FOLLOWER"
+	LEADER    raftState = iota
+	CANDIDATE 
+	FOLLOWER
 	NULL int = -1
 )
 
@@ -26,16 +26,6 @@ type LogEntry struct {
 	Term    int // when entry was received by leader
 }
 
- // random time
-func randomTimeForElectionTimeout() time.Duration {
-	ms := 400 + (rand.Int63() % 10) //TODO
-	return time.Duration(ms) * time.Millisecond
-}
-
-func randomTimeForHeartBeat() time.Duration {
-	ms := 50 + (rand.Int63() % 300)
-	return time.Duration(ms) * time.Millisecond
-}
 
 // RPC 
 
@@ -67,37 +57,24 @@ func newHeartBeatReply() *AppendEntriesReply {
 }
 
 
-// Log
-type Log struct {
-	log2A *log.Logger
-	log2B *log.Logger
+// about time
+const (
+	TickInterval int64 = 30
+	// Lower bound of heartbeat timeout. Election is raised when timeout as a follower.
+	BaseHeartbeatTimeout int64 = 300
+	// Lower bound of election timeout. Another election is raised when timeout as a candidate.	
+	BaseElectionTimeout int64 = 1000	
+	// Factor to control upper bound of heartbeat timeouts and election timeouts.
+	RandomFactor float64 = 0.8	
 
+)
+
+func randomHeartbeatTimeout() time.Duration {
+	extraTime := int64(float64(rand.Int63() % BaseHeartbeatTimeout) * RandomFactor)
+	return time.Duration(extraTime + BaseHeartbeatTimeout) * time.Millisecond
 }
 
-func NewLog() *Log {
-	// 删除文件
-	_ = os.Remove("./raft.log")
-	logFile, err := os.OpenFile("./raft.log", os.O_CREATE|os.O_WRONLY, 0644)
-    if err != nil {
-        fmt.Println("open log file failed, err:", err)
-        return nil
-    }
-	return &Log{
-		log2A: log.New(logFile, "[2A]", log.Lmicroseconds),
-		log2B: log.New(logFile, "[2B]", log.Lmicroseconds),
-	}
+func randomElectionTimeout() time.Duration {
+	extraTime := int64(float64(rand.Int63() % BaseElectionTimeout) * RandomFactor)
+	return time.Duration(extraTime + BaseElectionTimeout) * time.Millisecond
 }
-
-// func (l *Log) printf2A(me int, state raftState, term int, msg string) {
-// 	l.log2A.Printf("[peer %d | %s | term %d]: %s", me, state, term, msg)
-// }
-
-func (l *Log) printf2A(rf *Raft, msg string) {
-	l.log2A.Printf("[peer %d | %s | term %d]: %s", rf.me, rf.state, rf.currentTerm, msg)
-}
-
-func (l *Log) printf2B(rf *Raft, msg string) {
-	l.log2B.Printf("[peer %d | %s | term %d]: %s", rf.me, rf.state, rf.currentTerm, msg)
-}
-
-var logg *Log = NewLog()
