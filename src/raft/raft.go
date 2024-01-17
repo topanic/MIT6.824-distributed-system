@@ -60,6 +60,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	leaderId      int // the leader server that current server recognizes
 
 	// state
 	state       raftState
@@ -165,7 +166,6 @@ type RequestVoteReply struct {
 
 
 // example RequestVote RPC handler.
-// example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
@@ -247,6 +247,7 @@ func (rf *Raft) checkTerm(term int) bool {
 		rf.state = FOLLOWER
 		rf.currentTerm = term
 		rf.votedFor = NULL
+		rf.leaderId = -1
 		return true
 	}
 	return false
@@ -298,6 +299,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	Debug(dTimer, "S%d Resetting ELT, wait for next potential heartbeat timeout.", rf.me)
 	rf.setElectionTimeout(randomHeartbeatTimeout())
 
+	rf.leaderId = args.LeaderId
+
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if args.PrevLogTerm == -1 || args.PrevLogTerm != rf.log.getEntry(args.PrevLogIndex).Term {
 		Debug(dLog2, "S%d Prev log entries do not match. Ask leader to retry.", rf.me)
@@ -311,7 +314,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 	}
-	Debug(dLog2, "S%d <- S%d Append entries success. Saved logs: %v.", rf.me, args.LeaderId, args.Entries)
+  	Debug(dLog2, "S%d <- S%d Append entries success. Saved logs: %v.", rf.me, args.LeaderId, args.Entries)
+	if args.LeaderCommit > rf.commitIndex {
+		Debug(dCommit, "S%d Get higher LC at T%d, updating commitIndex. (%d < %d)",
+			rf.me, rf.currentTerm, rf.commitIndex, args.LeaderCommit)
+		rf.commitIndex = min(args.LeaderCommit, args.PrevLogIndex+len(args.Entries))
+		Debug(dCommit, "S%d Updated commitIndex at T%d. CI: %d.", rf.me, rf.currentTerm, rf.commitIndex)
+	}
 	reply.Success = true
 }
 
@@ -343,8 +352,8 @@ func (rf *Raft) sendEntries(isHeartbeat bool) {
 		if lastLogIndex >= nextIndex {
 			// If last log index ≥ nextIndex for a follower:
 			// send AppendEntries RPC with log entries starting at nextIndex
-			entries := make([]LogEntry, lastLogIndex-nextIndex+1)
-			copy(entries, rf.log.getSlice(nextIndex, lastLogIndex+1))
+			entries := make([]LogEntry, lastLogIndex - nextIndex + 1)
+			copy(entries, rf.log.getSlice(nextIndex, lastLogIndex + 1))
 			args.Entries = entries
 			Debug(dLog, "S%d -> S%d Sending append entries at T%d. PLI: %d, PLT: %d, LC: %d. Entries: %v.",
 				rf.me, peer, rf.currentTerm, args.PrevLogIndex,
@@ -372,7 +381,7 @@ func (rf *Raft) leaderSendEntries(args *AppendEntriesArgs, server int) {
 				rf.me, reply.Term, rf.currentTerm)
 			return
 		}
-    	if rf.currentTerm != args.Term {
+    if rf.currentTerm != args.Term {
 			Debug(dWarn, "S%d Term has changed after the append request, send entry reply discarded. "+
 				"requestTerm: %d, currentTerm: %d.", rf.me, args.Term, rf.currentTerm)
 			return
@@ -387,6 +396,24 @@ func (rf *Raft) leaderSendEntries(args *AppendEntriesArgs, server int) {
 			newMatch := args.PrevLogIndex + len(args.Entries)
 			rf.nextIndex[server] = max(newNext, rf.nextIndex[server])
 			rf.matchIndex[server] = max(newMatch, rf.matchIndex[server])
+			// If there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N,
+			// and log[N].term == currentTerm: set commitIndex = N (§5.3, §5.4).
+			for N := len(rf.log); N > rf.commitIndex && rf.log.getEntry(N).Term == rf.currentTerm; N-- {
+				count := 1
+				for peer, matchIndex := range rf.matchIndex {
+					if peer == rf.me {
+						continue
+					}
+					if matchIndex >= N {
+						count++
+					}
+				}
+				if count > len(rf.peers)/2 {
+					rf.commitIndex = N
+					Debug(dCommit, "S%d Updated commitIndex at T%d for majority consensus. CI: %d.", rf.me, rf.currentTerm, rf.commitIndex)
+					break
+				}
+			}
 		} else {
 			// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
 			if rf.nextIndex[server] > 1 {
@@ -503,7 +530,21 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	if rf.state != LEADER {
+		return -1, -1, false
+	}
+	logEntry := LogEntry {
+		Command: command,
+		Term: rf.currentTerm,
+	}
+	rf.log = append(rf.log, logEntry)
+	index = len(rf.log)
+	term = rf.currentTerm
+	Debug(dLog, "S%d Add command at T%d. LI: %d, Command: %v\n", rf.me, term, index, command)
+	rf.sendEntries(false)
 	return index, term, isLeader
 }
 
@@ -581,6 +622,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	
+	rf.leaderId = -1
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -590,6 +632,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	
 	// start ticker goroutine to start elections
 	go rf.ticker()
+
+	// Apply logs periodically until the last committed index to make sure state machine is up to date.
+	go rf.applyLogsLoop(applyCh)
 
 	return rf
 }

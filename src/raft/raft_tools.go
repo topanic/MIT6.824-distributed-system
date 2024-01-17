@@ -109,3 +109,30 @@ func (les LogEntries) getSlice(startIndex, endIndex int) LogEntries  {
 	}
 	return les[startIndex-1 : endIndex-1]
 }
+
+
+
+// For 2B
+func (rf *Raft) applyLogsLoop(applyCh chan ApplyMsg) {
+	for !rf.killed() {
+		// Apply logs periodically until the last committed index.
+		rf.mu.Lock()
+		// To avoid the apply operation getting blocked with the lock held,
+		// use a slice to store all committed msgs to apply, and apply them only after unlocked
+		appliedMsgs := []ApplyMsg{}
+		for rf.commitIndex > rf.lastApplied {
+			rf.lastApplied++
+			appliedMsgs = append(appliedMsgs, ApplyMsg{
+				CommandValid: true,
+				Command:      rf.log.getEntry(rf.lastApplied).Command,
+				CommandIndex: rf.lastApplied,
+			})
+			Debug(dLog2, "S%d Applying log at T%d. LA: %d, CI: %d.", rf.me, rf.currentTerm, rf.lastApplied, rf.commitIndex)
+		}
+		rf.mu.Unlock()
+		for _, msg := range appliedMsgs {
+			applyCh <- msg
+		}
+		time.Sleep(time.Duration(TickInterval) * time.Millisecond)
+	}
+}
