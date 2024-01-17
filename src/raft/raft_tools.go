@@ -1,10 +1,8 @@
 package raft
 
 import (
-	"fmt"
 	"log"
 	"math/rand"
-	"os"
 	"time"
 )
 
@@ -19,47 +17,13 @@ const (
 )
 
 
-// about log
-type LogEntry struct {
-	// first is 1.
-	Command string
-	Term    int // when entry was received by leader
-}
 
-
-// RPC 
-
-func newRequestVoteArgs(term int, candidateId int, lastLogIndex int, lastLogTerm int) *RequestVoteArgs {
-	return &RequestVoteArgs{
-		Term: term,
-		CandidateId: candidateId,
-		LastLogIndex: lastLogIndex,
-		LastLogTerm: lastLogTerm,
-	}
-}
-
-func newRequestVoteReply() *RequestVoteReply {
-	return &RequestVoteReply{
-		VoteGranted: false,
-	}
-}
-
-func newHeartBeatArgs(term int, leaderId int) *AppendEntriesArgs {
-	return &AppendEntriesArgs{
-		Term: term,
-		LeaderId: leaderId,
-		Entries: make([]*LogEntry, 0),
-	}
-}
-
-func newHeartBeatReply() *AppendEntriesReply {
-	return &AppendEntriesReply{}
-}
-
-
+// 
 // about time
 const (
 	TickInterval int64 = 30
+	HeartbeatInterval int64 = 100
+	
 	// Lower bound of heartbeat timeout. Election is raised when timeout as a follower.
 	BaseHeartbeatTimeout int64 = 300
 	// Lower bound of election timeout. Another election is raised when timeout as a candidate.	
@@ -77,4 +41,71 @@ func randomHeartbeatTimeout() time.Duration {
 func randomElectionTimeout() time.Duration {
 	extraTime := int64(float64(rand.Int63() % BaseElectionTimeout) * RandomFactor)
 	return time.Duration(extraTime + BaseElectionTimeout) * time.Millisecond
+}
+
+func (rf *Raft) setHeartbeatTimeout(d time.Duration) {
+	t := time.Now()
+	t = t.Add(d)
+	rf.heartbeatTime = t
+}
+
+func (rf *Raft) setElectionTimeout(d time.Duration) {
+	t := time.Now()
+	t = t.Add(d)
+	rf.electionTime = t
+}
+
+
+
+// about log
+type LogEntries []LogEntry
+
+type LogEntry struct {
+	// first is 1.
+	Command interface{}
+	Term    int // when entry was received by leader
+}
+
+// index and term start from 1
+func (les LogEntries) getEntry(index int) *LogEntry {
+	if index < 0 {
+		log.Panic("LogEntries.getEntry: index < 0.\n")
+	}
+	if index == 0 {
+		return &LogEntry{
+			Command: nil,
+			Term: 0,
+		}
+	}
+	if index > len(les) {
+		return &LogEntry{
+			Command: nil,
+			Term: NULL,
+		}
+	}
+	return &les[index - 1]
+}
+
+func (les LogEntries) lastLogInfo() (index, term int) {
+	index = len(les)
+	lastEntry := les.getEntry(index)
+	return index, lastEntry.Term
+}
+
+func (les LogEntries) getSlice(startIndex, endIndex int) LogEntries  {
+	if startIndex <= 0 {
+		Debug(dError, "LogEntries.getSlice: startIndex out of range. startIndex: %d, len: %d.",
+			startIndex, len(les))
+		log.Panic("LogEntries.getSlice: startIndex out of range. \n")
+	}
+	if endIndex > len(les)+1 {
+		Debug(dError, "LogEntries.getSlice: endIndex out of range. endIndex: %d, len: %d.",
+			endIndex, len(les))
+		log.Panic("LogEntries.getSlice: endIndex out of range.\n")
+	}
+	if startIndex > endIndex {
+		Debug(dError, "LogEntries.getSlice: startIndex > endIndex. (%d > %d)", startIndex, endIndex)
+		log.Panic("LogEntries.getSlice: startIndex > endIndex.\n")
+	}
+	return les[startIndex-1 : endIndex-1]
 }
